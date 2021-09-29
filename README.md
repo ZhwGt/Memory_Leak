@@ -27,3 +27,210 @@
 
 ### 检测效果
 ![内存泄漏检测器](https://user-images.githubusercontent.com/51261084/135281379-e658d4e4-bc86-41c8-9a65-86b77b5bf196.png)
+
+### 设计步骤
+重载 new 运算符
+创建一个静态对象，用于在原始程序退出时候才调用这个静态对象的析构函数
+这样两个步骤的好处在于：无需修改原始代码的情况下，就能进行内存检查。这同时也是我们希望看到的。所以，我们可以在LeakDetector.hpp 里首先实现：
+```cpp
+#ifndef __LEAK_DETECTOR__
+#define __LEAK_DETECTOR__
+
+void* operator new(size_t _size, char *_file, unsigned int _line);
+void* operator new[](size_t _size, char *_file, unsigned int _line);
+
+#ifndef __NEW_OVERLOAD_IMPLEMENTATION__
+#define new    new(__FILE__, __LINE__)
+#endif
+
+class _leak_detector
+{
+public:
+    static unsigned int callCount;
+    _leak_detector() noexcept {
+        ++callCount;
+    }
+    ~_leak_detector() noexcept {
+        if (--callCount == 0)
+            LeakDetector();
+    }
+private:
+    static unsigned int LeakDetector() noexcept;
+};
+static _leak_detector _exit_counter;
+#endif
+```
+为什么要设计 callCount? callCount 保证了我们的 LeakDetector 只调用了一次(智能指针计数原理类似)。
+
+既然我们已经重载了 new 操作符，那么我们很自然就能想到通过手动管理内存申请和释放，如果我们 delete 时没有将申请的内存全部释放完毕，那么一定发生了内存泄露。接下来一个问题就是，使用什么结构来实现手动管理内存？
+
+不妨使用双向链表来实现内存泄露检查。原因在于，对于内存检查器来说，并不知道实际代码在什么时候会需要申请内存空间，所以使用线性表并不够合理，一个动态的结构（链表）是非常便捷的。而我们在删除内存检查器中的对象时，需要更新整个结构，对于单向链表来说，也是不够便利的。
+```cpp
+#include <iostream>
+#include <cstring>
+
+#define __NEW_OVERLOAD_IMPLEMENTATION__
+#include "LeakDetector.hpp"
+#include "MemNode.hpp"
+
+static unsigned long mallocated = 0;  // 保存未释放的内存大小
+
+static MemNode root = {
+    &root, &root, // 第一个元素的前向后向指针均指向自己
+    0, false,               // 其申请的内存大小为 0, 且不是数组
+    NULL, 0                 // 文件指针为空, 行号为0
+};
+
+unsigned int _leak_detector::callCount = 0;
+
+void* AllocateMemory(size_t size, bool array, char *file, unsigned line) {
+    size_t newSize = sizeof(MemNode) + size;
+
+    MemNode *node = (MemNode*)malloc(newSize);
+
+    node->ne = root.ne;
+    node->pre = &root;
+    node->size = size;
+    node->isArray = array;
+    node->file = NULL;
+
+    if (file) {
+        node->file = (char *)malloc(strlen(file)+1);
+        strcpy(node->file, file);
+    }
+    node->line = line;
+
+    root.ne->pre = node;
+    root.ne = node;
+
+    mallocated += size;
+
+    return (char*)node + sizeof(MemNode);
+}
+
+
+void  DeleteMemory(void* _ptr, bool array) {
+    // 返回 MemoryList 开始处
+    MemNode *curNode = (MemNode *)((char *)_ptr - sizeof(MemNode));
+
+    if (curNode->isArray != array) return;
+
+    // 更新列表
+    curNode->pre->ne = curNode->ne;
+    curNode->ne->pre = curNode->pre;
+    mallocated -= curNode->size;
+
+    // 记得释放存放文件信息时申请的内存
+    if (curNode->file) free(curNode->file);
+    free(curNode);
+}
+
+// 重载 new 运算符
+void* operator new(size_t size) {
+	std::cout << "operator new(size_t size)" << std::endl;
+    return AllocateMemory(size, false, NULL, 0);
+}
+void* operator new[](size_t size) {
+	std::cout << "operator new[](size_t size)" << std::endl;
+    return AllocateMemory(size, true, NULL, 0);
+}
+void* operator new(size_t size, char *file, unsigned int line) {
+	std::cout << "operator new(size_t size, char *file, unsigned int line) " << std::endl;
+    return AllocateMemory(size, false, file, line);
+}
+void* operator new[](size_t size, char *file, unsigned int line) {
+	std::cout << "operator new(size_t size, char *file, unsigned int line)" << std::endl;
+    return AllocateMemory(size, true, file, line);
+}
+// 重载 delete 运算符
+void operator delete(void *_ptr) noexcept {
+	std::cout << "operator delete(void *_ptr)" << std::endl;
+    DeleteMemory(_ptr, false);
+}
+void operator delete[](void *_ptr) noexcept {
+	std::cout << "operator delete(void *_ptr)" << std::endl;
+    DeleteMemory(_ptr, true);
+}
+
+//
+//  LeakDetector.cpp
+//  LeakDetector
+//
+unsigned int _leak_detector::LeakDetector(void) noexcept {
+    unsigned int count = 0;
+    // 遍历整个列表, 如果有内存泄露，那么 _LeakRoot.ne 总不是指向自己的
+    MemNode *ptr = root.ne;
+    while (ptr && ptr != &root)
+    {
+        // 输出存在内存泄露的相关信息, 如泄露大小, 产生泄露的位置
+        if(ptr->isArray) std::cout << "leak[] ";
+        else std::cout << "leak   ";
+
+		std::cout << ptr << " size " << ptr->size;
+
+		if (ptr->file) std::cout << " (locate in " << ptr->file << " line " << ptr->line << ")";
+        else std::cout << " (Cannot find position)";
+        std::cout << std::endl;
+
+        ++count;
+        ptr = ptr->ne;
+    }
+
+    if (count) std::cout << "Total " << count << " leaks, size "<< mallocated << " byte." << std::endl;
+    return count;
+}
+```
+内存节点关系信息
+```cpp
+#ifndef __MEMNODE_H__
+#define __MEMNODE_H__
+
+struct MemNode {
+     struct MemNode *ne, *pre;
+     size_t size;       // 申请内存的大小
+     bool isArray;    // 是否申请了数组
+     char *file;      // 存储所在文件
+     unsigned int line;  // 保存所在行
+};
+
+#endif
+```
+
+主函数中的测试代码
+```cpp
+#include <iostream>
+
+// 在这里实现内存泄露检查
+#include "LeakDetector.hpp"
+
+// 测试异常分支泄露
+class Err {
+public:
+    Err(int n) {
+        if(n == 0) throw 1000;
+        data = new int[n];
+    }
+    ~Err() {
+        delete[] data;
+    }
+private:
+    int *data;
+};
+
+int main() {
+
+    // 忘记释放指针 b 申请的内存，从而导致内存泄露
+    int *a = new int;
+    int *b = new int;
+    delete a;
+
+    // 0 作为参数传递给构造函数将发生异常，从而导致异常分支的内存泄露
+    try {
+        Err* e = new Err(0);
+        delete e;
+    } catch (int &ex) {
+        std::cout << "Exception catch: " << ex << std::endl;
+    };
+    return 0;
+}
+```
