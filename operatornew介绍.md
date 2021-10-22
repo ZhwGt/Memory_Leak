@@ -58,3 +58,19 @@ int main()
 ```
 
 **总结** C++中关键字new的作用，使用关键字new会先调用operator new函数，其中size的计算法方法是sizeof + new关键字后面的值(char/short/int/double)等。并且申请内存知识operatornew做的事情，对象初始化还要调用构造函数。
+
+## 二、调用重载的new
+### 1.new关键字默认调用
+```cpp
+void* operator new(size_t size); //new关键字的默认调用
+```
+### 2.调用重载operator new
+```cpp
+#define new new(__func__, __LINE__)
+int* p = new int;
+```
+上面经过预处理后
+```cpp
+int* p = new(__func__, __LINE__)int; //多样化自主调用
+```
+然后关键字这种形式的new会去找operator new(size_t size, char* s, size_t no);
