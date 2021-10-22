@@ -25,6 +25,12 @@ void* operator new (size_t size){
         return t;
 }
 
+void* operator new[](size_t size){
+  cout << size << endl;
+  void* t = (void*)malloc(size); //申请内存
+  return t;
+}
+
 int main()
 {
   char *c = new char;
@@ -32,8 +38,12 @@ int main()
   int *i = new int;
   double* d = new double;
 
+  int* pi = new int[10];
+  char* pc = new char[20];
+
   return 0;
 }
+
 ```
 
 输出:
@@ -42,6 +52,9 @@ int main()
 2
 4
 8
+40
+20
+
 ```
 
 **总结** C++中关键字new的作用，使用关键字new会先调用operator new函数，其中size的计算法方法是sizeof + new关键字后面的值(char/short/int/double)等。并且申请内存知识operatornew做的事情，对象初始化还要调用构造函数。
