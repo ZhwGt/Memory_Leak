@@ -1,6 +1,9 @@
 # operator delete
 ## 一、功能
 ### 1.释放内存空间
+关键字delete内含2阶段操作：
+– 调用析构函数析构对象
+– 调用::operator delete释放内存
 ### 2.函数原型
 ```cpp
 void operator delete (void* ptr) noexcept;

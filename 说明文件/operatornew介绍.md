@@ -1,6 +1,10 @@
 # operator new
 ## 一、功能
 ### 1.分配存储空间
+关键字new内含2阶段:
+– 调用operator new分配内存
+– 调用构造函数构造对象
+
 ### 2.函数原型
 ```cpp
 void* operator new (std::size_t size);
